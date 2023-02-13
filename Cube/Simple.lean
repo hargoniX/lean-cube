@@ -52,7 +52,7 @@ namespace Cube.Simple
 inductive Ty where
 | nat
 | fun (x : Ty) (res : Ty)
-deriving Repr
+deriving Repr, DecidableEq
 
 inductive Ast where
 | var (x : String)
@@ -66,7 +66,7 @@ inductive Expr where
 | lam (ty : Ty) (body : Expr) (orig : String)
 | const (name : String)
 | app (f : Expr) (x : Expr)
-deriving Repr
+deriving Repr, DecidableEq
 
 abbrev TranslationEnv := List String
 
@@ -88,16 +88,16 @@ def Ast.toExpr : Ast → TranslationEnv → Expr
 def Expr.toAst : Expr → TranslationEnv → Option Ast
 | bvar idx, vs => do
   let x ← vs[idx]?
-  pure <| .var x
+  return .var x
 | fvar x, _ => some <| .var x
 | lam ty b x, vs => do
     let body ← toAst b <| x :: vs
-    pure <| .lam x ty body
+    return .lam x ty body
 | const name, _ => some <| .const name
 | .app f x, vs => do
     let fAst ← toAst f vs
     let xAst ← toAst x vs
-    pure <| .app fAst xAst
+    return .app fAst xAst
 
 
 declare_syntax_cat stlc
@@ -158,5 +158,188 @@ theorem Ast.toExpr_inv_toAst (a : Ast) (xs : List String) : Expr.toAst (Ast.toEx
 theorem Ast.macro_correct (a : Ast) : Expr.toAst (Ast.toExpr a []) [] = some a := toExpr_inv_toAst a []
 
 #eval [stlc| λ x : ℕ . (λ y : ℕ -> ℕ . freee y x)]
+
+namespace Expr
+
+inductive ClosedTo : Nat → Expr → Prop where
+| bvar (h : n < m): ClosedTo m (.bvar n)
+| lam (h : ClosedTo (n + 1) body) : ClosedTo n (.lam ty body orig)
+| const : ClosedTo n (.const name)
+| app (h1 : ClosedTo n f) (h2 : ClosedTo n x) : ClosedTo n (.app f x)
+
+abbrev Closed (e : Expr) := ClosedTo 0 e
+
+def ClosedExpr := { e : Expr // Closed e }
+
+abbrev Context := List Ty
+abbrev Env := String → Option Ty
+
+inductive Typing : Env → Context → Expr → Ty → Prop where
+| const (h : env name = some typ) : Typing env ctx (.const name) typ
+| app (h1 : Typing env ctx f (.fun t1 t2)) (h2 : Typing env ctx x t1) : Typing env ctx (.app f x) t2
+| lam (h : Typing env (t1 :: ctx) body t2) : Typing env ctx (.lam t1 body orig) (.fun t1 t2)
+| bvar (h : idx < ctx.length) : Typing env ctx (.bvar idx) (ctx.get ⟨idx, h⟩)
+
+notation Δ " :: " Γ " ⊢ " e " : " t => Typing Δ Γ e t
+
+def ClosedExpr.infer (expr : ClosedExpr) (env : Env) : Option Ty :=
+  go expr.val expr.property [] rfl
+where
+  go {n : Nat} (expr : Expr) (h1 : ClosedTo n expr) (ctx : Context) (h2 : ctx.length = n) : Option Ty := 
+    match expr with
+    | .bvar idx =>
+      if hVar:idx < n then
+        some <| ctx.get ⟨idx, h2 ▸ hVar⟩
+      else
+        none
+    | .app fn arg => Id.run do
+      have closedFn : ClosedTo n fn := by
+        cases h1; assumption
+      have closedArg : ClosedTo n arg := by
+        cases h1; assumption
+      if let some (.fun t1 t2) := go fn closedFn ctx h2 then
+        if let some t3 := go arg closedArg ctx h2 then
+          if t1 = t3 then
+            return some t2
+      return none
+    | .lam t1 body _ =>
+      have bodyClosed : ClosedTo (ctx.length + 1) body := by
+        cases h1
+        rw [h2]
+        assumption
+      if let some t2 := go body bodyClosed (t1 :: ctx) rfl then
+        some (.fun t1 t2)
+      else
+        none
+    | .fvar .. => nomatch h1
+    | .const name =>
+      match env name with
+      | some ty => some ty
+      | none => none
+
+theorem ClosedExpr.infer.go_sound (expr : Expr) (env : Env) (ctx : Context) (h1 : ClosedTo ctx.length expr) (h2 : ClosedExpr.infer.go env expr h1 ctx rfl = some t) : env :: ctx ⊢ expr : t := by
+  induction expr generalizing t ctx with
+  | fvar => contradiction
+  | const name =>
+    unfold infer.go at h2
+    split at h2
+    next =>
+      apply Typing.const
+      simp [*]
+    next => contradiction
+  | app f x fih xih =>
+    unfold infer.go at h2
+    simp [Id.run] at h2
+    repeat split at h2
+    next _ t2 t3 h3 _ t1 h4 h5 =>
+      injections
+      simp_all
+      apply Typing.app
+      case h1 =>
+        apply fih _ (by cases h1; assumption)
+        assumption
+      case h2 =>
+        apply xih _ (by cases h1; assumption)
+        assumption
+    repeat contradiction
+  | lam ty body _ ih =>
+    unfold infer.go at h2
+    simp at h2
+    split at h2
+    next _ _ t3 h3 =>
+      simp at h2
+      rw[←h2]
+      apply Typing.lam
+      apply ih
+      exact h3
+    next => contradiction
+  | bvar idx =>
+    have idx_get : t = ctx.get ⟨idx, (by cases h1; assumption)⟩ := by
+      unfold go at h2
+      split at h2
+      next =>
+        injections
+        simp [*]
+      next => contradiction
+    rw[idx_get]
+    apply Typing.bvar
+
+theorem ClosedExpr.infer_sound (expr : ClosedExpr) (env : Env) (h : expr.infer env = some t) : env :: [] ⊢ expr.val : t := by
+  unfold infer at h
+  apply ClosedExpr.infer.go_sound
+  assumption
+
+theorem ClosedExpr.infer.go_complete (expr : Expr) (env : Env) (ctx : Context) (h1 : ClosedTo ctx.length expr) (h2 : env :: ctx ⊢ expr : t) : ClosedExpr.infer.go env expr h1 ctx rfl = some t := by
+  induction h2 with
+  | const =>
+    unfold go
+    split
+    next => simp_all
+    next => simp_all
+  | app hf hx ih1 ih2 =>
+    unfold go
+    simp[Id.run]
+    have ih1 := ih1 (by cases h1; assumption)
+    have ih2 := ih2 (by cases h1; assumption)
+    repeat split
+    next => simp_all
+    next => simp_all
+    next _ _ _ t _ _ _ _ _ _ _ _ _ h =>
+      apply False.elim
+      apply h t
+      assumption
+    next _ _ _ t1 t2 _ _ _ _ h =>
+      apply False.elim
+      apply h t1 t2
+      assumption
+  | lam _ ih =>
+    unfold go
+    simp
+    have ih := ih (by cases h1; assumption)
+    split
+    next a b c d e f g h i j => simp_all
+    next _ _ _ _ _ _ _ h =>
+      apply False.elim
+      apply h _ ih
+  | bvar h_idx => simp_all[go]
+
+theorem ClosedExpr.infer_complete (expr : ClosedExpr) (env : Env) (h : env :: [] ⊢ expr.val : t) :  expr.infer env = some t := by
+  unfold infer
+  apply ClosedExpr.infer.go_complete _ _ []
+  assumption
+
+def abstract (target : String) (expr : Expr) : Expr :=
+  go 0 expr
+where
+  go (idx : Nat) (expr : Expr) :=
+    match expr with
+    | .fvar name =>
+      if target = name then
+        .bvar idx
+      else
+        .fvar name
+    | .app fn arg => .app (go idx fn) (go idx arg)
+    | .lam ty body orig => .lam ty (go (idx + 1) body) orig
+    | .const name => .const name
+    | .bvar idx => .bvar idx
+
+def instantiate (image : Expr) (expr : Expr) : Expr :=
+  go 0 expr
+where
+  go (targetIdx : Nat) (expr : Expr) :=
+    match expr with
+    | .bvar idx =>
+      if idx = targetIdx then
+        image
+      else
+        .bvar idx
+    | .app fn arg => .app (go targetIdx fn) (go targetIdx arg)
+    | .lam ty body orig => .lam ty (go (targetIdx + 1) body) orig
+    | .fvar name => .fvar name
+    | .const name => .const name
+
+def substitute (image : Expr) (name : String) (expr : Expr) : Expr :=
+  expr.abstract name |>.instantiate image
+end Expr
 
 end Cube.Simple

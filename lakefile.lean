@@ -5,7 +5,7 @@ package cube {
   -- add package configuration options here
 }
 
-@[defaultTarget]
+@[default_target]
 lean_lib Cube {
   -- add library configuration options here
 }

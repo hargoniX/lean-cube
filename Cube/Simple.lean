@@ -304,6 +304,35 @@ theorem ClosedExpr.infer_complete (expr : ClosedExpr) (env : Env) (h : env :: []
   apply ClosedExpr.infer.go_complete _ _ []
   assumption
 
+def ClosedExpr.typecheck (env : Env) (expr : ClosedExpr) (typ : Ty) : Bool := Id.run do
+  if let some inferredTyp := expr.infer env then
+    if inferredTyp = typ then
+      return true
+  return false
+
+theorem ClosedExpr.typecheck_sound (expr : ClosedExpr) (t : Ty) (env : Env) (h : expr.typecheck env t = true) : env :: [] ⊢ expr.val : t := by
+  simp [typecheck, Id.run] at h
+  repeat split at h
+  next =>
+    apply infer_sound
+    simp [*]
+  repeat contradiction
+
+theorem ClosedExpr.typecheck_complete (expr : ClosedExpr) (t : Ty) (env : Env) (h : env :: [] ⊢ expr.val : t) : expr.typecheck env t = true := by
+  simp [typecheck, Id.run]
+  split
+  next _ t2 h2 =>
+    have : some t2 = some t := by
+      rw[←h2]
+      apply infer_complete
+      assumption
+    simp_all
+  next _ h2 =>
+    apply False.elim
+    apply h2
+    apply infer_complete
+    assumption
+
 def abstract (target : String) (expr : Expr) : Expr :=
   go 0 expr
 where

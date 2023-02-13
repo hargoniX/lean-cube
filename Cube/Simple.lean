@@ -228,10 +228,9 @@ theorem ClosedExpr.infer.go_sound (expr : Expr) (env : Env) (ctx : Context) (h1 
       simp [*]
     next => contradiction
   | app f x fih xih =>
-    unfold infer.go at h2
-    simp [Id.run] at h2
+    simp [infer.go, Id.run] at h2
     repeat split at h2
-    next _ t2 t3 h3 _ t1 h4 h5 =>
+    next =>
       injections
       simp_all
       apply Typing.app
@@ -243,8 +242,7 @@ theorem ClosedExpr.infer.go_sound (expr : Expr) (env : Env) (ctx : Context) (h1 
         assumption
     repeat contradiction
   | lam ty body _ ih =>
-    unfold infer.go at h2
-    simp at h2
+    simp [infer.go] at h2
     split at h2
     next _ _ t3 h3 =>
       simp at h2
@@ -277,10 +275,9 @@ theorem ClosedExpr.infer.go_complete (expr : Expr) (env : Env) (ctx : Context) (
     next => simp_all
     next => simp_all
   | app hf hx ih1 ih2 =>
-    unfold go
-    simp[Id.run]
     have ih1 := ih1 (by cases h1; assumption)
     have ih2 := ih2 (by cases h1; assumption)
+    simp[go, Id.run]
     repeat split
     next => simp_all
     next => simp_all
@@ -293,11 +290,10 @@ theorem ClosedExpr.infer.go_complete (expr : Expr) (env : Env) (ctx : Context) (
       apply h t1 t2
       assumption
   | lam _ ih =>
-    unfold go
-    simp
     have ih := ih (by cases h1; assumption)
+    simp[go]
     split
-    next a b c d e f g h i j => simp_all
+    next => simp_all
     next _ _ _ _ _ _ _ h =>
       apply False.elim
       apply h _ ih

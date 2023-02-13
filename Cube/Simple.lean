@@ -333,6 +333,21 @@ theorem ClosedExpr.typecheck_complete (expr : ClosedExpr) (t : Ty) (env : Env) (
     apply infer_complete
     assumption
 
+theorem Typing.unique (h1 : env :: ctx ⊢ expr : ty1) (h2 : env :: ctx ⊢ expr : ty2) : ty1 = ty2 := by
+  match term:h1 with
+  | .const .. => cases h2; simp_all
+  | .bvar .. => cases h2; simp_all
+  | .app h3 h4 .. =>
+    cases h2 with
+    | app h5 h6 =>
+      have := unique h3 h5
+      injections
+  | .lam h3 =>
+    cases h2 with
+    | lam h4 =>
+      have := unique h3 h4
+      simp_all
+
 def abstract (target : String) (expr : Expr) : Expr :=
   go 0 expr
 where

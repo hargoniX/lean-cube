@@ -174,14 +174,20 @@ theorem Expr.church_rosser (expr expr1' expr2' : Expr) (h1 : expr →β* expr1')
   apply Multi.confluent_of_determ step_deterministic
   repeat assumption
 
-def halts (expr : Expr) : Prop := ∃ expr', (expr →β expr') ∧ Value expr'
+def Expr.halts (expr : Expr) : Prop := ∃ expr', (expr →β* expr') ∧ Value expr'
 
-def R (t : Ty) (expr : Expr) : Prop :=
-  (∀ env, (env , []) ⊢ expr : t) ∧ halts expr ∧ match t with
+theorem Value.halts (expr : Expr) (h : Value expr) : expr.halts := by
+  constructor
+  constructor
+  exact Multi.rfl
+  assumption
+
+def R (env : Expr.Env) (t : Ty) (expr : Expr) : Prop :=
+  ((env , []) ⊢ expr : t) ∧ expr.halts ∧ match t with
   | .nat => True
-  | .fun t1 t2 => ∀ s, R t1 s → R t2 (.app expr s)
+  | .fun t1 t2 => ∀ s, R env t1 s → R env t2 (.app expr s)
 
-theorem R.halts (h : R typ expr) : halts expr := by
+theorem R.halts (h : R env typ expr) : expr.halts := by
   cases typ <;> (
     unfold R at h
     cases h with
@@ -190,14 +196,122 @@ theorem R.halts (h : R typ expr) : halts expr := by
       assumption
   )
 
-theorem R.typable (h : R typ expr) (env : Expr.Env) : (env, []) ⊢ expr : typ := by
+theorem R.typable_empty (h : R env typ expr) : (env, []) ⊢ expr : typ := by
   cases typ <;> (
     unfold R at h;
     cases h with
-    | intro left right => exact left env)
+    | intro left right => exact left)
 
-theorem R.beta_reduction_preserves (h1 : expr →β expr') (h2 : R typ expr) : R typ expr' := by
-  sorry
+theorem Expr.step_preserves_halt (expr expr' : Expr) (steps : expr →β expr') : expr.halts ↔ expr'.halts := by
+  constructor
+  case mp =>
+    intro h
+    match h with
+    | ⟨w, ⟨hw, hv⟩⟩ =>
+      cases hw with
+      | rfl =>
+        exfalso
+        apply Value.normal
+        repeat (first | assumption | constructor)
+      | step _ _ _ steps2 multistep =>
+        rewrite [Expr.step_deterministic _ _ _ steps steps2]
+        apply Exists.intro
+        constructor
+        repeat assumption
+  case mpr =>
+    intro h
+    match h with
+    | ⟨w, ⟨hw, hv⟩⟩ =>
+      constructor
+      constructor
+      case left => apply Multi.step; repeat assumption
+      case right => assumption
+
+theorem R.step_preserves (expr expr' : Expr) (steps : expr →β expr') : R env t expr → R env t expr' := by
+  intro h
+  induction t generalizing expr expr' with
+  | nat =>
+    simp_all only [R, and_true]
+    constructor
+    case left =>
+      apply Expr.subject_reduction
+      exact h.left
+      assumption
+    case right =>
+      rw[←Expr.step_preserves_halt]
+      exact h.right
+      assumption
+  | «fun» preimage image preih imih =>
+    simp_all only [R]
+    refine And.intro ?_ (And.intro ?_ ?_)
+    next =>
+      apply Expr.subject_reduction
+      exact h.left
+      assumption
+    next =>
+      rw[←Expr.step_preserves_halt]
+      exact h.right.left
+      assumption
+    next =>
+      intro s hs
+      apply imih
+      case steps =>
+        apply BetaStep.leftApp
+        assumption
+      case h =>
+        apply h.right.right
+        assumption
+
+theorem R.multi_step_preserves (expr expr' : Expr) (steps : expr →β* expr') : R env t expr → R env t expr' := by
+  intro h
+  induction steps with
+  | rfl => assumption
+  | step _ _ _ _ _ ih2 =>
+    apply ih2
+    apply R.step_preserves
+    repeat assumption
+
+theorem R.step_preserves' (typed : (env, []) ⊢ expr : t) (steps : expr →β expr') (h : R env t expr') : R env t expr := by
+  induction t generalizing expr expr' with
+  | nat =>
+    simp_all only [R, and_true, true_and]
+    rw[Expr.step_preserves_halt]
+    exact h.right
+    assumption
+  | «fun» preimage image preih imih =>
+    simp_all only [R, true_and]
+    constructor
+    case left =>
+      rw[Expr.step_preserves_halt]
+      exact h.right.left
+      assumption
+    case right =>
+      intro s hs
+      apply imih
+      case typed =>
+        unfold R at hs
+        apply Expr.Typing.app
+        assumption
+        exact hs.left
+      case steps =>
+        apply BetaStep.leftApp
+        assumption
+      case h =>
+        apply h.right.right
+        assumption
+
+theorem R.multi_step_preserves' (typed : (env, []) ⊢ expr : t) (steps : expr →β* expr') (h : R env t expr') : R env t expr := by
+  induction steps with
+  | rfl => assumption
+  | step _ _ _ _ _ ih2 =>
+    apply R.step_preserves'
+    assumption
+    assumption
+    apply ih2
+    case typed =>
+      apply Expr.subject_reduction
+      repeat assumption
+    case h => assumption
 
 theorem Expr.strong_normalization (expr : Expr) (typed : (env, ctx) ⊢ expr : ty) : ∃ target, (expr →β target) ∧ Value target := by
   sorry

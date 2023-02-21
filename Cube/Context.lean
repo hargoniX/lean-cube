@@ -1,121 +1,51 @@
-import Std.Data.Nat.Lemmas
-import Std.Data.List.Lemmas
-
+import Std.Data.RBMap
 
 namespace Cube
 
-abbrev Context := List
+structure FVarId where
+  name : String
+  id : Nat
+deriving Repr, DecidableEq
 
-def Context.set (ctx : Context α) (n : Nat) (ty : α) : Context α :=
-  match ctx, n with
-  | [], 0 => [ty]
-  | [], _ + 1 => []
-  | _ :: xs, 0 => ty :: xs
-  | x :: xs, n + 1 => x :: set xs n ty
+def FVarId.toName (fvarId : FVarId) : Lean.Name :=
+    .str (.num .anonymous fvarId.id) fvarId.name
 
-@[simp]
-theorem Context.set_nil_zero : Context.set [] 0 ty = [ty] := rfl
+instance : Ord FVarId where
+  compare lhs rhs := lhs.toName.cmp rhs.toName
 
-@[simp]
-theorem Context.set_nil_succ : Context.set [] (i + 1) ty = [] := rfl
+abbrev Env (Expr : Type u) := Std.RBMap String Expr (inferInstance : Ord String).compare
+abbrev Context (Expr : Type u)  := Std.RBMap FVarId Expr (inferInstance : Ord FVarId).compare
 
-@[simp]
-theorem Context.set_cons_zero : Context.set (x :: xs) 0 ty = ty :: xs := rfl
+def Env.get (env : Env Expr) (name : String) : Option Expr := env.find? name
 
-@[simp]
-theorem Context.set_cons_succ : Context.set (x :: xs) (i + 1) ty = x :: (Context.set xs i ty) := rfl
+def Context.empty : Context Expr := Std.RBMap.empty
 
-theorem Context.get_set (ctx : Context α) (i : Nat) (h : i < (Context.set ctx i ty).length) : List.get (Context.set ctx i ty) ⟨i, h⟩ = ty :=
-  match ctx, i with
-  | [], 0 => rfl
-  | [], _ + 1 => by simp_arith [set, List.length] at h
-  | _ :: xs, 0 => rfl
-  | x :: xs, n + 1 => by
-    simp only [set]
-    apply get_set
+def Context.update (ctx : Context Expr) (var : FVarId) (ty : Expr) : Context Expr :=
+  ctx.insert var ty
 
-theorem Context.length_le_set_length : ctx.length ≤ (Context.set ctx i ty).length :=
-  match ctx, i with
-  | [], 0 => by simp_arith
-  | [], _ + 1 => by simp_arith
-  | _ :: xs, 0 => by simp_arith[set_cons_zero]
-  | x :: xs, n + 1 => by
-    simp only [Context.set_cons_succ, List.length_cons]
-    apply Nat.succ_le_succ
-    apply length_le_set_length
+def Context.get (ctx : Context Expr) (var : FVarId) : Option Expr := ctx.find? var
 
-theorem Context.set_bounds_eq_length (h : i < ctx.length) : (Context.set ctx i ty).length = ctx.length :=
-  match ctx, i with
-  | [], 0 => by contradiction
-  | [], _ + 1 => by contradiction
-  | _ :: xs, 0 => by simp
-  | x :: xs, n + 1 => by
-    simp only [set_cons_succ, List.length_cons, Nat.succ.injEq]
-    apply set_bounds_eq_length
-    apply Nat.lt_of_succ_lt_succ
-    assumption
+-- TODO: These should appear in std4 eventually
+theorem Context.get_empty (var : FVarId): Context.empty.get var = (none : Option Expr) := by
+  simp [Context.get, Std.RBMap.find?, empty, Std.RBMap.empty, Std.mkRBMap, Std.mkRBSet, Std.RBMap.findEntry?, Std.RBSet.findP?, Std.RBNode.find?, Option.map]
 
-theorem Context.set_out_of_bounds_eq_length (h : ctx.length < i) : (Context.set ctx i ty).length = ctx.length :=
-  match ctx, i with
-  | [], 0 => by contradiction
-  | [], _ + 1 => by simp
-  | _ :: xs, 0 => by simp
-  | x :: xs, n + 1 => by
-    simp only [set_cons_succ, List.length_cons, Nat.succ.injEq]
-    apply set_out_of_bounds_eq_length
-    apply Nat.lt_of_succ_lt_succ
-    assumption
+theorem Context.get_update (ctx : Context Expr) (var : FVarId) (ty : Expr) : (ctx.update var ty).get var = some ty := by sorry
 
-theorem Context.set_succ_bound_eq_append (h : i = ctx.length) : (Context.set ctx i ty) = ctx ++ [ty] :=
-  match ctx, i with
-  | [], 0 => by simp
-  | [], _ + 1 => by contradiction
-  | _ :: xs, 0 => by contradiction
-  | x :: xs, n + 1 => by
-    simp [set_cons_succ, List.length_cons, Nat.succ.injEq, true_and]
-    apply set_succ_bound_eq_append
-    injection h
+theorem Context.get_update_irrelevant (ctx : Context Expr) (var1 var2 : FVarId) (ty : Expr) (h : var1 ≠ var2) : (ctx.update var1 ty).get var2 = ctx.get var2 := by sorry
 
-theorem Context.set_succ_bound_length_eq_succ_length (h : i = ctx.length) : (Context.set ctx i ty).length = ctx.length + 1 := by
-  simp_all[Context.set_succ_bound_eq_append]
+def FVar.fresh (ctx : Context Expr) : FVarId :=
+  match ctx.max with
+  | none => ⟨"_uniq", 0⟩
+  | some (⟨_, idx⟩, _) => ⟨"_uniq", idx + 1⟩
 
-theorem Context.get_set_neq {ctx : Context α} (h1 : i = ctx.length) (h2 : idx ≠ i) (h3 : idx < List.length ctx) : List.get (Context.set ctx i ty) ⟨idx, by rw[Context.set_succ_bound_length_eq_succ_length]; apply Nat.lt_succ_of_lt h3; assumption⟩ = List.get ctx ⟨idx, h3⟩ :=
-  match ctx, i with
-  | [], 0 => by contradiction
-  | [], _ + 1 => by contradiction
-  | _ :: xs, 0 => by contradiction
-  | x :: xs, n + 1 => by
-    simp only [set_cons_succ, List.length_cons]
-    cases idx with
-    | zero => simp
-    | succ idx =>
-      simp only [List.get_cons_succ]
-      apply get_set_neq
-      injection h1
-      next =>
-        intro h
-        apply h2
-        simp [h]
+def FVar.freshM (ty : Expr) : StateM (Context Expr) FVarId := do
+  let ctx ← get
+  let new := FVar.fresh ctx
+  set (ctx.update new ty)
+  return new
 
-theorem Context.get_set_irrelevant (ctx : Context α) (i1 i2 : Nat) (h1 : i2 < ctx.length) (h2 : i1 ≠ i2) : List.get (Context.set ctx i1 ty) ⟨i2, Nat.lt_of_lt_of_le h1 length_le_set_length⟩ = List.get ctx ⟨i2, h1⟩ :=
-  match ctx, i1 with
-  | [], 0 => by
-    simp only [set, List.length] at h1
-    cases h1
-    repeat contradiction
-  | [], _ + 1 => by simp [Context.set_nil_succ]
-  | _ :: xs, 0 => by
-    simp only [Context.set_cons_zero]
-    cases i2 with
-    | zero => contradiction
-    | succ i2 => simp only [List.get_cons_succ]
-  | x :: xs, n + 1 => by
-    simp only [Context.set_cons_succ]
-    cases i2 with
-    | zero => simp
-    | succ i2 =>
-      simp only [List.get_cons_succ]
-      apply get_set_irrelevant
-      simp_all
+theorem FVar.fresh_is_fresh (ctx : Context Expr) : ctx.get (FVar.fresh ctx) = none := sorry
+theorem FVar.freshM_is_fresh (ctx : Context Expr) : ctx.get ((FVar.freshM ty).run' ctx) = none := by
+  simp [FVar.freshM, fresh_is_fresh]
 
 end Cube

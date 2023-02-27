@@ -425,10 +425,8 @@ where
   simplifyPair (pair : DisagreementPair) (subst : Substitution) : SimpleM (Option (Substitution ⊕ DisagreementSet)) := do
     let lhs := pair.fst
     let rhs := pair.snd
-    dbg_trace s!"{repr lhs} =?= {repr rhs}"
     match hlflex:lhs.flexibility, hrflex:rhs.flexibility with
     | .rigid, .rigid =>
-      dbg_trace s!"Rigid, Rigid"
       if lhs.binder != rhs.binder || lhs.head != rhs.head then
         return none
       else
@@ -437,19 +435,17 @@ where
           let newLhs := BetaEtaNormalExpr.ofNormalExpr newLhs
           let newRhs := BetaEtaNormalExpr.ofNormalExpr newRhs
           let newPair := ⟨{newLhs with binder := lhs.binder.append newLhs.binder}, {newRhs with binder := rhs.binder.append newRhs.binder}⟩
-          dbg_trace s!"RR new: {repr newPair}"
           set.insert newPair
         let newDisagreements := newProblems.foldl (init := .empty) folder
         return some <| .inr newDisagreements
     | .flexible, .flexible =>
-      dbg_trace s!"Flex, Flex"
       let lhsVal := inhabitant (← lhs.headType)
       let rhsVal := inhabitant (← rhs.headType)
       let subst := subst.insert (lhs.headFVarId hlflex) lhsVal
         |>.insert (rhs.headFVarId hrflex) rhsVal
       return some <| .inl subst
-    | .flexible, .rigid => dbg_trace s!"Flex, Rigid" return some <| .inr <| HashSet.empty.insert (lhs, rhs)
-    | .rigid, .flexible => dbg_trace s!"Rigid, Flex" return some <| .inr <| HashSet.empty.insert (rhs, lhs)
+    | .flexible, .rigid => return some <| .inr <| HashSet.empty.insert (lhs, rhs)
+    | .rigid, .flexible => return some <| .inr <| HashSet.empty.insert (rhs, lhs)
 
   findMatcherTarget (set : DisagreementSet) : Option ({ e : BetaEtaNormalExpr // e.flexibility = .flexible} × { e : BetaEtaNormalExpr // e.flexibility = .rigid}) := do
     for (lhs, rhs) in set do
@@ -459,15 +455,38 @@ where
       | _, _ => pure ()
     none
 
+  projection (binder : Array Ty) (targetFVar : FVarId) (z : Nat) (zTelescope : Array Ty) : SimpleM Substitution := do
+    let mut hs := #[]
+    -- TODO this opt should be possible below as well
+    let args := (zTelescope.size - 1).fold (init := #[]) (fun idx args => args.push (.bvar idx))
+    -- TODO Dedup with projection
+    for hResTy in zTelescope[:zTelescope.size - 1] do
+      let hTyTelescope := binder.push hResTy
+      let hTy := Ty.ofTelescope hTyTelescope
+      let hFVar ← FVar.freshM hTy
+      let hTerm := mkApp (.fvar hFVar) args
+      hs := hs.push hTerm
+    let replacer := abstractArgs (mkApp (.bvar z) hs) zTelescope
+    let candidate := (Substitution.empty.insert targetFVar replacer)
+    return candidate
+
+  projections (e : BetaEtaNormalExpr) (targetFVar : FVarId) (targetFVarTyTelescope : Array Ty) (resultTy : Ty) : SimpleM (List Substitution) := do
+    let mut substs := []
+    for i in [0:targetFVarTyTelescope.size - 1] do
+      let iTy := targetFVarTyTelescope[i]!
+      let iTyTelescope := iTy.telescope
+      let iResultTy := iTyTelescope[iTyTelescope.size - 1]!
+      if resultTy == iResultTy then
+        substs := (← projection e.binder targetFVar i iTyTelescope) :: substs
+    return substs
+
   matcher (flex : { e : BetaEtaNormalExpr // e.flexibility = .flexible}) (rig : { e : BetaEtaNormalExpr // e.flexibility = .rigid}) : SimpleM (List Substitution) := do
     let targetFVar := flex.val.headFVarId flex.property
     let targetFVarTyTelescope := (← getCtx).find! targetFVar |>.telescope
     match hhead:rig.val.head with
-    | .bvar idx => throw "not implemented" -- projection
+    | .bvar idx => projections flex.val targetFVar targetFVarTyTelescope (rig.val.binder.get! (rig.val.binder.size - idx))
     | .const name =>
       -- imitation
-      dbg_trace "imitation"
-      let mut candidates := []
       let mut hs := #[]
       let constTy := (← getEnv).find! name
       let constTyTelescope := constTy.telescope
@@ -479,7 +498,7 @@ where
         let hTerm := mkApp (.fvar hFVar) args
         hs := hs.push hTerm
       let replacer := abstractArgs (mkApp (.const name) hs) (targetFVarTyTelescope[:targetFVarTyTelescope.size - 1])
-      candidates := (Substitution.empty.insert targetFVar replacer) :: candidates
+      let candidates := (Substitution.empty.insert targetFVar replacer) :: (← projections flex.val targetFVar targetFVarTyTelescope (constTyTelescope.get! (constTyTelescope.size - 1)))
       -- TODO: Projection
       return candidates
     | .fvar .. => nomatch BetaEtaNormalExpr.False_of_rigid_fvar rig.property hhead
@@ -490,9 +509,11 @@ where
     ([stlc| λ a : ℕ . f a], [stlc| λ b : ℕ . x], Env.empty, (Context.empty.insert ⟨"f", 0⟩ (.fun .nat .nat) |>.insert ⟨"x", 0⟩ .nat)),
     -- rigid, rigid
     ([stlc| λ f : ℕ → ℕ . f x], [stlc| λ g : ℕ → ℕ . g x], Env.empty, (Context.empty.insert ⟨"x", 0⟩ .nat)),
-    -- flexible, rigid const
+    -- flexible, rigid
+    ([stlc| λ y : ℕ . x], [stlc| λ y : ℕ . 0], (Env.empty.insert "0" .nat), (Context.empty.insert ⟨"x", 0⟩ .nat)),
     ([stlc| λ x : ℕ . f x], [stlc| λ y : ℕ . 0], (Env.empty.insert "0" .nat), (Context.empty.insert ⟨"f", 0⟩ (.fun .nat .nat))),
-    ([stlc| λ x : ℕ . f x], [stlc| λ y : ℕ . C y], (Env.empty.insert "C" (.fun .nat .nat)), (Context.empty.insert ⟨"f", 0⟩ (.fun .nat .nat)))
+    ([stlc| λ x : ℕ . f x], [stlc| λ y : ℕ . C y], (Env.empty.insert "C" (.fun .nat .nat)), (Context.empty.insert ⟨"f", 0⟩ (.fun .nat .nat))),
+    ([stlc| λ x : ℕ . f (C (f x))], [stlc| λ x : ℕ . C x], (Env.empty.insert "C" (.fun .nat .nat)), (Context.empty.insert ⟨"f", 0⟩ (.fun .nat .nat)))
   ]
   for (expr1, expr2, env, ctx) in testPairs do
     let subst := unify expr1 expr2 |>.run' env ctx
@@ -500,6 +521,7 @@ where
     | .ok subst => 
       let expr1' := expr1.applySubst subst |>.betaReduce
       let expr2' := expr2.applySubst subst |>.betaReduce
+      IO.println s!"{repr subst}"
       IO.println s!"{repr expr1'}"
       IO.println s!"{repr expr2'}"
       IO.println ""

@@ -33,7 +33,7 @@ deriving Repr
 inductive Expr where
 | bvar (idx : Nat)
 | fvar (name : FVarId)
-| lam (orig : String) (ty : Ty) (body : Expr)
+| lam (ty : Ty) (body : Expr)
 | const (name : String)
 | app (func : Expr) (arg : Expr)
 deriving Repr, DecidableEq, Inhabited, Hashable
@@ -47,21 +47,7 @@ def Ast.toExpr : Ast → TranslationEnv → Expr
   | none => .fvar ⟨name, 0⟩
 | const name, _ => .const name
 | app func arg, vs => .app (toExpr func vs) (toExpr arg vs)
-| lam x ty body, vs => .lam x ty (toExpr body <| x :: vs)
-
-def Expr.toAst : Expr → TranslationEnv → Option Ast
-| bvar idx, vs => do
-  let x ← vs[idx]?
-  return .var x
-| fvar fvarId, _ => some <| .var fvarId.name
-| lam name ty body, vs => do
-    let body ← toAst body <| name :: vs
-    return .lam name ty body
-| const name, _ => some <| .const name
-| .app func arg, vs => do
-    let funcAst ← toAst func vs
-    let argAst ← toAst arg vs
-    return .app funcAst argAst
+| lam x ty body, vs => .lam ty (toExpr body <| x :: vs)
 
 declare_syntax_cat stlc
 declare_syntax_cat stlcTy
@@ -78,7 +64,7 @@ syntax "(" stlc ")" : stlc
 syntax "[stlcTy|" stlcTy "]" : term
 syntax "[stlcA|" stlc "]" : term
 syntax "[stlc|" stlc "]" : term
-#check String.Pos
+
 macro_rules
   | `([stlcTy| ℕ]) => `(Ty.nat)
   | `([stlcTy| $a → $b]) => `(Ty.fun [stlcTy| $a] [stlcTy| $b])
@@ -98,27 +84,6 @@ macro_rules
   | `([stlc| $t ]) => `(Ast.toExpr [stlcA| $t] [])
 
 #eval [stlcTy| (ℕ → ℕ → ℕ) → ℕ → ℕ] == (Ty.ofTelescope [stlcTy| (ℕ → ℕ → ℕ) → ℕ → ℕ].telescope)
-
-theorem Ast.toExpr_inv_toAst (a : Ast) (xs : List String) : Expr.toAst (Ast.toExpr a xs) xs = some a := by
-  induction a generalizing xs with
-  | var name =>
-    simp only [Ast.toExpr]
-    split
-    case var.h_1 idx h =>
-      simp only [Expr.toAst,Bind.bind, Option.bind, Pure.pure]
-      have h2 := List.findIdx?_bounds h
-      simp only [getElem?, h2, congrArg, List.getElem_eq_get, Option.some.injEq, var.injEq]
-      have h3 := List.findIdx?_prop h
-      simp [of_decide_eq_true h3]
-    case var.h_2 => simp [Expr.toAst]
-  | const name => simp[Expr.toAst, Ast.toExpr]
-  | lam var ty body ih =>
-    simp[Expr.toAst, Ast.toExpr, Bind.bind, Option.bind, Pure.pure, ih]
-  | app func arg fih xih =>
-    simp[Expr.toAst, Ast.toExpr, Bind.bind, Option.bind, fih, xih, Pure.pure]
-
-theorem Ast.macro_correct (a : Ast) : Expr.toAst (Ast.toExpr a []) [] = some a := toExpr_inv_toAst a []
-
 #eval [stlc| λ x : ℕ . (λ y : ℕ → ℕ . (free y) x)]
 
 namespace Expr
@@ -132,7 +97,7 @@ def abstract (expr : Expr) (target : FVarId) (idx : Nat := 0): Expr :=
     else
       .fvar name
   | .app fn arg => .app (abstract fn target idx) (abstract arg target idx )
-  | .lam orig ty body => .lam orig ty (abstract body target (idx + 1))
+  | .lam ty body => .lam ty (abstract body target (idx + 1))
   | .const name => .const name
   | .bvar idx => .bvar idx
 
@@ -144,7 +109,7 @@ def instantiate (expr : Expr) (image : Expr) (targetIdx : Nat := 0) : Expr :=
     else
       .bvar idx
   | .app fn arg => .app (instantiate fn image targetIdx ) (instantiate arg image targetIdx )
-  | .lam orig ty body => .lam orig ty (instantiate body image (targetIdx + 1))
+  | .lam ty body => .lam ty (instantiate body image (targetIdx + 1))
   | .fvar name => .fvar name
   | .const name => .const name
 
@@ -174,7 +139,7 @@ partial def infer (expr : Expr) : SimpleM Ty := do
           throw s!"Arg type mismatch in {repr expr}, argument should have type {repr t1} but has type {repr t3}"
       else
         throw s!"Function type mismatch in {repr expr}, function should have function type"
-  | .lam _ t1 body =>
+  | .lam t1 body =>
     let newFVar := FVar.fresh (← getCtx)
     let newBody := body.instantiate (.fvar newFVar)
     let ctx ← getCtx
@@ -201,11 +166,11 @@ partial def betaReduce (expr : Expr) : Expr :=
   | .app fn arg =>
     let newArg := betaReduce arg
     match fn with
-    | .lam _ _ body =>
+    | .lam _ body =>
       let newBody := body.instantiate arg
       betaReduce newBody
     | _ => .app (betaReduce fn) newArg
-  | .lam orig t body => .lam orig t (betaReduce body)
+  | .lam t body => .lam t (betaReduce body)
   | .bvar idx => .bvar idx
   | .fvar fvarId => .fvar fvarId
   | .const name => .const name
@@ -220,7 +185,7 @@ def applySubst (subst : Substitution) (expr : Expr) : Expr :=
 
 def lambdaLength (expr : Expr) (n : Nat := 0) : Nat :=
   match expr with
-  | .lam _ _ body => lambdaLength body (n + 1)
+  | .lam _ body => lambdaLength body (n + 1)
   | _ => n
 
 def typeLength (ty : Ty) : Nat :=
@@ -239,7 +204,7 @@ def getNthType! (ty : Ty) (idx : Nat) : Ty :=
 def raiseIndices (expr : Expr) (n : Nat) : Expr :=
   match expr with
   | .app fn arg => .app (raiseIndices fn n) (raiseIndices arg n)
-  | .lam orig t body => .lam orig t (raiseIndices body n)
+  | .lam t body => .lam t (raiseIndices body n)
   | .bvar idx => .bvar (idx + n)
   | .fvar fvarId => .fvar fvarId
   | .const name => .const name
@@ -257,8 +222,8 @@ def etaExpand (expr : Expr) (ty : Ty) : Expr :=
 where
   go (expr : Expr) (relevantTy : Ty) : Expr :=
     match expr with
-    | .lam orig t body => .lam orig t (go body relevantTy)
-    | _ => .lam "eta" relevantTy (.app (raiseIndices expr 1) (.bvar 0))
+    | .lam t body => .lam t (go body relevantTy)
+    | _ => .lam relevantTy (.app (raiseIndices expr 1) (.bvar 0))
 
 def betaEtaNormalForm (expr : Expr) (ty : Ty) : Expr :=
   let betaNormalForm := betaReduce expr
@@ -274,11 +239,11 @@ def lambdaTelescope (expr : Expr) : Array Ty × Expr :=
 where
   go (expr : Expr) (binders : Array Ty) : Array Ty × Expr :=
     match expr with
-    | .lam _ t1 body => go body (binders.push t1)
+    | .lam t1 body => go body (binders.push t1)
     | _ => (binders, expr)
 
 def abstractArgs (body : Expr) (args : Array Ty) : Expr :=
-  args.foldr (init := body) (fun ty body => .lam "abstract" ty body)
+  args.foldr (init := body) (fun ty body => .lam ty body)
 
 def appTelescope (expr : Expr) : Array Expr × Expr :=
   let (revArgs, remainder) := go expr #[]
@@ -292,7 +257,7 @@ where
 def mkApp (fn : Expr) (args : Array Expr) : Expr :=
   args.foldl (init := fn) (fun fn arg => .app fn arg)
 
-#eval mkApp (.const "1") #[.const "2", .const "3"] == [stlc| (1 2) 3] 
+#eval mkApp (.const "A") #[.const "B", .const "C"] == [stlc| (A B) C]
 
 -- TODO: Maybe it is worth it to have a seperate data type for βη normalized exprs
 namespace Unify
@@ -355,7 +320,7 @@ def BetaEtaNormalExpr.headType (expr : BetaEtaNormalExpr) : SimpleM Ty := do
 def inhabitant (ty : Ty) : Expr :=
   match ty with
   | .nat => .const "0"
-  | .fun t1 t2 => .lam "inhab" t1 (inhabitant t2)
+  | .fun t1 t2 => .lam t1 (inhabitant t2)
 
 def BetaEtaNormalExpr.headFVarId (expr : BetaEtaNormalExpr) (h : expr.flexibility = .flexible) : FVarId :=
   match h2:expr.head with

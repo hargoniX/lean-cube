@@ -5,12 +5,13 @@ namespace Cube.Simple.Expr
 partial def betaReduce (expr : Expr) : Expr :=
   match expr with
   | .app fn arg =>
+    let newFn := betaReduce fn
     let newArg := betaReduce arg
-    match fn with
+    match newFn with
     | .lam _ body =>
       let newBody := body.instantiate arg
       betaReduce newBody
-    | _ => .app (betaReduce fn) newArg
+    | _ => .app fn newArg
   | .lam t body => .lam t (betaReduce body)
   | .bvar idx => .bvar idx
   | .fvar fvarId => .fvar fvarId

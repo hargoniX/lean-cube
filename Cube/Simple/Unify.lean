@@ -2,6 +2,7 @@ import Cube.Simple.Basic
 import Cube.Simple.Infer
 import Cube.Simple.Eval
 
+open Lean
 namespace Cube.Simple.Expr
 
 namespace Unify

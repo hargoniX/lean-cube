@@ -5,7 +5,7 @@ namespace Cube
 structure FVarId where
   name : String
   id : Nat
-deriving Repr, DecidableEq, Hashable
+deriving Repr, DecidableEq, Hashable, Inhabited
 
 def FVarId.toName (fvarId : FVarId) : Lean.Name :=
     .str (.num .anonymous fvarId.id) fvarId.name

@@ -3,7 +3,7 @@ import Cube.Simple.Basic
 namespace Cube.Simple.Expr
 
 partial def infer (expr : Expr) : SimpleM Ty := do
-  match h:expr with
+  match expr with
   | .bvar idx => throw s!"Unbound variable index: {idx}"
   | .app fn arg => 
       if let .fun t1 t2 ← infer fn then
